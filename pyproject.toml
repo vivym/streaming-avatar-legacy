@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "streaming-avatar"
+dynamic = ["version"]
+description = "Streaming Avatar"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "./LICENSE" }
+keywords = ["Avatar"]
+authors = [
+  { name = "Ming Yang", email = "ymviv@qq.com" },
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: Implementation :: CPython",
+]
+dependencies = [
+]
+
+[project.urls]
+Documentation = "https://github.com/vivym/streaming-avatar#readme"
+Issues = "https://github.com/vivym/streaming-avatar/issues"
+Source = "https://github.com/vivym/streaming-avatar"
