@@ -16,6 +16,8 @@ from PIL import Image
 from torchvision.transforms import functional as TrF, InterpolationMode
 from tqdm import tqdm
 
+from .face_parsing import FaceParsing
+
 Avatar = str | Path | Image.Image | list[Image.Image] | list[str | Path] | np.ndarray | torch.Tensor
 
 
@@ -155,6 +157,8 @@ def preprocess_avatar(
 
     vae: AutoencoderKL = AutoencoderKL.from_pretrained(vae_model_name_or_path)
 
+    fp = FaceParsing(device)
+
     def vae_encode(x: torch.Tensor) -> torch.Tensor:
         with torch.inference_mode():
             posterior: DiagonalGaussianDistribution = vae.encode(x.to(vae.dtype)).latent_dist
@@ -189,7 +193,7 @@ def preprocess_avatar(
                 continue
 
             # RGB -> BGR
-            results = inference_topdown(dwpose_model, frame[..., ::-1].cpu().numpy())
+            results = inference_topdown(dwpose_model, frame.flip(-1).cpu().numpy())
             results = merge_data_samples(results)
             keypoints = results.pred_instances.keypoints
             face_landmark = keypoints[0, 23:91].astype(np.int32)
@@ -206,14 +210,15 @@ def preprocess_avatar(
             half_face_dist = np.max(face_landmark[:, 1]) - half_face_coord[1]
             upper_bond = half_face_coord[1] - half_face_dist
 
-            x1 = np.min(face_landmark[:, 0])
-            y1 = upper_bond
-            x2 = np.max(face_landmark[:, 0])
-            y2 = np.max(face_landmark[:, 1])
+            x1 = int(np.min(face_landmark[:, 0]))
+            y1 = int(upper_bond)
+            x2 = int(np.max(face_landmark[:, 0]))
+            y2 = int(np.max(face_landmark[:, 1]))
 
             if y2 - y1 <= 0 or x2 - x1 <= 0 or x1 < 0:
                 # invalid landmark bbox, use face bbox instead
                 landmark_bboxes.append(face_bbox)
+                x1, y1, x2, y2 = face_bbox
             else:
                 landmark_bboxes.append((x1, y1, x2, y2))
 
@@ -243,12 +248,63 @@ def preprocess_avatar(
         latents = torch.cat([latents, masked_latents], dim=1)
 
         # Prepare masks
+
+        expand = 1.2
+        upper_boundary_ratio = 0.5
+
+        masks = []
         for landmark_bbox, frame in zip(landmark_bboxes, frames):
             if landmark_bbox is None:
+                masks.append(None)
                 continue
 
             x1, y1, x2, y2 = landmark_bbox
-            frame[y1:y2, x1:x2] = 0.0
+            x_c, y_c = (x1 + x2) // 2, (y1 + y2) // 2
+            w, h = x2 - x1, y2 - y1
+            s = int(max(w, h) // 2 * expand)
+
+            bbox = [x_c - s, y_c - s, x_c + s, y_c + s]
+            bbox = list(map(lambda x: max(0, x), bbox))
+
+            expanded_face = frame[bbox[1]:bbox[3], bbox[0]:bbox[2]]
+            expanded_face = expanded_face.permute(2, 0, 1).to(dtype=torch.float32).div_(255.0)
+
+            expanded_face_512 = TrF.resize(
+                expanded_face,
+                (512, 512),
+                interpolation=InterpolationMode.BICUBIC,
+                antialias=True,
+            )
+            expanded_face_512 = TrF.normalize(
+                expanded_face_512,
+                mean=(0.485, 0.456, 0.406),
+                std=(0.229, 0.224, 0.225),
+            )
+
+            mask = fp.parse(expanded_face_512[None])[0]
+            mask[mask > 13] = 0
+            mask[mask >= 1] = 255
+
+            mask = TrF.resize(
+                mask[None],
+                expanded_face.shape[-2:],
+                interpolation=InterpolationMode.NEAREST,
+            )
+            mask_h = mask.shape[-2]
+            upper_boundary = int(mask_h * upper_boundary_ratio)
+
+            # TODO: check if this is correct
+            mask[:upper_boundary] = 0
+            mask[-(bbox[3] - y2):] = 0
+            mask[:, :x1 - bbox[0]] = 0
+            mask[:, -(bbox[2] - x2):] = 0
+
+            kernel_size = int(0.1 * expanded_face.shape[-1] // 2 * 2) + 1
+            mask = TrF.gaussian_blur(mask, kernel_size=kernel_size)
+
+            masks.append(mask)
+
+        masks = torch.stack(masks, dim=0)
 
     avg_range_minus = int(np.mean(range_minus_list))
     avg_range_plus = int(np.mean(range_plus_list))

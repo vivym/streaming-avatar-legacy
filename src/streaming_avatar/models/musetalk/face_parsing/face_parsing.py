@@ -1,5 +1,6 @@
 import torch
 from huggingface_hub import hf_hub_download
+from torchvision.transforms import functional as TrF
 
 from .bisenet import BiSeNet
 
@@ -24,5 +25,7 @@ class FaceParsing:
 
         self.net = net
 
+    @torch.no_grad()
     def parse(self, images: torch.Tensor) -> torch.Tensor:
-        ...
+        out: torch.Tensor = self.net(images)[0]
+        return out.argmax(dim=1)

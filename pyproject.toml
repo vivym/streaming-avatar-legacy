@@ -26,6 +26,7 @@ dependencies = [
     "diffusers>=0.29.0",
     "aiortc>=1.9.0",
     "imageio>=2.34.1",
+    "accelerate>=0.31.0",
 ]
 
 [project.urls]
