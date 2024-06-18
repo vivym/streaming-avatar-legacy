@@ -142,6 +142,7 @@ def _to_tensor(
 @torch.no_grad()
 def preprocess_avatar(
     avatar: Avatar,
+    output_dir: str | Path,
     bbox_shift: int = 0,
     batch_size: int = 1,
     device: str | torch.device = torch.device("cpu"),
@@ -156,6 +157,7 @@ def preprocess_avatar(
     face_detector = load_face_detector(device)
 
     vae: AutoencoderKL = AutoencoderKL.from_pretrained(vae_model_name_or_path)
+    vae = vae.to(device)
 
     fp = FaceParsing(device)
 
@@ -167,6 +169,7 @@ def preprocess_avatar(
 
     range_minus_list = []
     range_plus_list = []
+    cur = 0
     for frames in tqdm(
         _to_tensor(avatar, batch_size=batch_size, dtype=torch.uint8, device=device),
         desc="Preprocessing avatar",
@@ -241,20 +244,20 @@ def preprocess_avatar(
         )
 
         masked_frames = normalized_frames.clone()
-        masked_frames[:, :, 128:] = 0.0
+        masked_frames[:, :, 128:] = -1.0
 
         latents = vae_encode(normalized_frames)
         masked_latents = vae_encode(masked_frames)
-        latents = torch.cat([latents, masked_latents], dim=1)
-
-        # Prepare masks
+        latents = torch.cat([masked_latents, latents], dim=1)
 
         expand = 1.2
         upper_boundary_ratio = 0.5
 
+        mask_bboxes = []
         masks = []
         for landmark_bbox, frame in zip(landmark_bboxes, frames):
             if landmark_bbox is None:
+                mask_bboxes.append(None)
                 masks.append(None)
                 continue
 
@@ -289,22 +292,43 @@ def preprocess_avatar(
                 mask[None],
                 expanded_face.shape[-2:],
                 interpolation=InterpolationMode.NEAREST,
-            )
+            )[0]
             mask_h = mask.shape[-2]
             upper_boundary = int(mask_h * upper_boundary_ratio)
 
-            # TODO: check if this is correct
             mask[:upper_boundary] = 0
             mask[-(bbox[3] - y2):] = 0
             mask[:, :x1 - bbox[0]] = 0
             mask[:, -(bbox[2] - x2):] = 0
 
             kernel_size = int(0.1 * expanded_face.shape[-1] // 2 * 2) + 1
-            mask = TrF.gaussian_blur(mask, kernel_size=kernel_size)
+            mask = TrF.gaussian_blur(mask[None], kernel_size=kernel_size)
+            mask = mask[0]
 
+            mask_bboxes.append(bbox)
             masks.append(mask)
 
         masks = torch.stack(masks, dim=0)
+
+        output_dir = Path(output_dir)
+        if not output_dir.exists():
+            output_dir.mkdir(parents=True)
+
+        for frame, landmark_bbox, latent, mask_bbox, mask in zip(
+            frames, landmark_bboxes, latents, mask_bboxes, masks
+        ):
+            save_path = output_dir / f"{cur:04d}.pth"
+            torch.save(
+                {
+                    "frame": frame.cpu(),
+                    "landmark_bbox": landmark_bbox,
+                    "latent": latent.cpu(),
+                    "mask_bbox": mask_bbox,
+                    "mask": mask.to(dtype=torch.uint8, device="cpu"),
+                },
+                save_path,
+            )
+            cur += 1
 
     avg_range_minus = int(np.mean(range_minus_list))
     avg_range_plus = int(np.mean(range_plus_list))

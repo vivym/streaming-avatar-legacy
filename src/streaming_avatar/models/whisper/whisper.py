@@ -79,6 +79,7 @@ class Conv1d(nn.Conv1d):
 class MultiHeadAttention(nn.Module):
     def __init__(self, n_state: int, n_head: int):
         super().__init__()
+
         self.n_head = n_head
         self.query = Linear(n_state, n_state)
         self.key = Linear(n_state, n_state, bias=False)
@@ -155,6 +156,7 @@ class ResidualAttentionBlock(nn.Module):
 class AudioEncoder(nn.Module):
     def __init__(self, n_mels: int, n_ctx: int, n_state: int, n_head: int, n_layer: int):
         super().__init__()
+
         self.conv1 = Conv1d(n_mels, n_state, kernel_size=3, padding=1)
         self.conv2 = Conv1d(n_state, n_state, kernel_size=3, stride=2, padding=1)
         self.register_buffer("positional_embedding", sinusoids(n_ctx, n_state))
